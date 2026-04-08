@@ -64,6 +64,30 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(new ErrorResponse("PASSWORD_MISMATCH", ex.getMessage()));
     }
+    
+    @ExceptionHandler(InvalidPasswordException.class)
+    public ResponseEntity<?> handleInvalidPassword(InvalidPasswordException ex) {
+    	return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+    			.body(new ErrorResponse("INVALID_PASSWORD", ex.getMessage()));
+    }
+    
+    @ExceptionHandler(UserNotFoundException.class)
+    public ResponseEntity<?> handleUserNotFound(UserNotFoundException ex) {
+    	return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+    			.body(new ErrorResponse("USER_NOT_FOUND", ex.getMessage()));
+    }
+    
+    @ExceptionHandler(InvalidRefreshToken.class)
+    public ResponseEntity<?> handleInvalidRefreshToken(InvalidRefreshToken ex) {
+    	return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+    			.body(new ErrorResponse("INVALID_REFRESH_TOKEN", ex.getMessage()));
+    }
+    
+    @ExceptionHandler(ExpiredRefreshTokenException.class)
+    public ResponseEntity<?> handleExpireRefreshToken(ExpiredRefreshTokenException ex) {
+    	return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+    			.body(new ErrorResponse("REFRESH_TOKEN_EXPIRED", ex.getMessage()));
+    }
 
     @ExceptionHandler(UserAlreadyExistsException.class)
     public ResponseEntity<?> handleUserExists(UserAlreadyExistsException ex) {
