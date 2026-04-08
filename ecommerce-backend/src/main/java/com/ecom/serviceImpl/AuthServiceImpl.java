@@ -8,12 +8,19 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import com.ecom.configurations.JwtUtil;
+import com.ecom.dto.AuthResponse;
+import com.ecom.dto.LoginRequest;
+import com.ecom.dto.RefreshTokenRequest;
 import com.ecom.dto.RegisterRequest;
+import com.ecom.entity.Customer;
 import com.ecom.entity.OtpVerification;
-import com.ecom.entity.User;
+import com.ecom.entity.RefreshToken;
 import com.ecom.enums.Role;
 import com.ecom.exceptions.InvalidIdentifierException;
 import com.ecom.exceptions.InvalidOtpException;
+import com.ecom.exceptions.InvalidPasswordException;
+import com.ecom.exceptions.InvalidRefreshToken;
 import com.ecom.exceptions.InvalidTokenException;
 import com.ecom.exceptions.OtpExpiredException;
 import com.ecom.exceptions.OtpNotFoundException;
@@ -21,8 +28,10 @@ import com.ecom.exceptions.OtpNotVerifiedException;
 import com.ecom.exceptions.OtpSendFailedException;
 import com.ecom.exceptions.PasswordMismatchException;
 import com.ecom.exceptions.UserAlreadyExistsException;
+import com.ecom.exceptions.UserNotFoundException;
+import com.ecom.repository.CustomerRepository;
 import com.ecom.repository.OtpRepository;
-import com.ecom.repository.UserRepository;
+import com.ecom.repository.RefreshTokenRepository;
 import com.ecom.service.AuthService;
 import com.ecom.service.EmailService;
 import com.ecom.service.SmsService;
@@ -34,7 +43,7 @@ public class AuthServiceImpl implements AuthService {
     private OtpRepository otpRepository;
 
     @Autowired
-    private UserRepository userRepository;
+    private CustomerRepository customerRepository;
 
     @Autowired
     private EmailService emailService;
@@ -44,6 +53,12 @@ public class AuthServiceImpl implements AuthService {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+    
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Autowired
+    private RefreshTokenRepository refreshTokenRepository;
 
     // 🔹 Generate OTP
     public String generateOtp() {
@@ -59,7 +74,7 @@ public class AuthServiceImpl implements AuthService {
         }
 
         boolean isEmail = identifier.contains("@gmail.com");
-        boolean isPhone = identifier.matches("\\d{10}");
+//        boolean isPhone = identifier.matches("\\d{10}");
 
         // ✅ Validate format
         if (isEmail && !identifier.matches("^[A-Za-z0-9+_.-]+@(.+)$")) {
@@ -68,10 +83,6 @@ public class AuthServiceImpl implements AuthService {
 
         if(!isEmail) {
         	throw new InvalidIdentifierException("Invalid email format. Must be ends with @gmail.com");        	
-        }else {
-        	if(!isEmail && !isPhone) {
-        		throw new InvalidIdentifierException("Invalid phone number. Must be 10 digits");
-        	}
         }
         
 
@@ -92,9 +103,7 @@ public class AuthServiceImpl implements AuthService {
         try {
             if (isEmail) {
                 emailService.sendEmail(identifier, otp);
-            } else {
-                smsService.sendSms(identifier, otp);
-            }
+            } 
         } catch (Exception e) {
             throw new OtpSendFailedException("Failed to send OTP. Please try again later.");
         }
@@ -148,16 +157,16 @@ public class AuthServiceImpl implements AuthService {
         }
 
         // ✅ Phone Validation
-        if (!isEmail && !identifier.matches("\\d{10}")) {
-            throw new InvalidIdentifierException("Invalid phone number. Must be 10 digits");
-        }
+//        if (!isEmail && !identifier.matches("\\d{10}")) {
+//            throw new InvalidIdentifierException("Invalid phone number. Must be 10 digits");
+//        }
 
         // ✅ Check if user already exists
-        if (isEmail && userRepository.findByEmail(identifier).isPresent()) {
+        if (isEmail && customerRepository.findByEmail(identifier).isPresent()) {
             throw new UserAlreadyExistsException("User already registered with this email");
         }
 
-        if (!isEmail && userRepository.findByPhone(identifier).isPresent()) {
+        if (!isEmail && customerRepository.findByPhone(identifier).isPresent()) {
             throw new UserAlreadyExistsException("User already registered with this phone number");
         }
 
@@ -177,24 +186,84 @@ public class AuthServiceImpl implements AuthService {
             throw new PasswordMismatchException("Passwords do not match");
         }
 
-        User user = new User();
+        Customer customer = new Customer();
 
         if (isEmail) {
-            user.setEmail(identifier);
+            customer.setEmail(identifier);
         } else {
-            user.setPhone(identifier);
+            customer.setPhone(identifier);
         }
 
-        user.setPassword(passwordEncoder.encode(request.password()));
-        user.setRole(Role.CUSTOMER);
+        customer.setPassword(passwordEncoder.encode(request.password()));
+        customer.setRole(Role.CUSTOMER);
 
-        userRepository.save(user);
+        customerRepository.save(customer);
 
         // ✅ Send Welcome Email
-        if (user.getEmail() != null) {
-            emailService.sendWelcomeEmail(user.getEmail());
+        if (customer.getEmail() != null) {
+            emailService.sendWelcomeEmail(customer.getEmail());
         }
 
         return "User registered successfully";
     }
+    
+   
+    //login
+    public AuthResponse login(LoginRequest request) {
+
+        Customer user = null;
+
+        if (request.identifier().contains("@")) {
+            user = customerRepository.findByEmail(request.identifier())
+                    .orElseThrow(() -> new UserNotFoundException("User not found"));
+        } 
+//        else {
+//            user = userRepository.findByPhone(request.identifier())
+//                    .orElseThrow(() -> new RuntimeException("User not found"));
+//        }
+
+        if (!passwordEncoder.matches(request.password(), user.getPassword())) {
+            throw new InvalidPasswordException("Invalid password");
+        }
+
+        String accessToken = jwtUtil.generateAccessToken(request.identifier());
+        String refreshToken = jwtUtil.generateRefreshToken(request.identifier());
+
+        RefreshToken tokenEntity = new RefreshToken();
+        tokenEntity.setToken(refreshToken);
+        tokenEntity.setUsername(request.identifier());
+        tokenEntity.setExpiryDate(LocalDateTime.now().plusDays(1));
+
+        refreshTokenRepository.save(tokenEntity);
+
+        return new AuthResponse(accessToken, refreshToken);
+    }
+    
+    
+    //refresh token
+    public AuthResponse refreshToken(RefreshTokenRequest refreshToken) {
+
+        RefreshToken token = refreshTokenRepository.findByToken(refreshToken.refreshToken())
+                .orElseThrow(() -> new InvalidRefreshToken("Invalid refresh token"));
+
+        if (token.getExpiryDate().isBefore(LocalDateTime.now())) {
+            throw new RuntimeException("Refresh token expired");
+        }
+
+        String newAccessToken = jwtUtil.generateAccessToken(token.getUsername());
+
+        return new AuthResponse(newAccessToken, refreshToken.refreshToken());
+    }
+    
+    //logout
+    public String logout(String refreshToken) {
+
+        RefreshToken token = refreshTokenRepository.findByToken(refreshToken)
+                .orElseThrow(() -> new InvalidRefreshToken("Invalid refresh token"));
+
+        refreshTokenRepository.delete(token);
+
+        return "Logged out successfully";
+    }
+    
 }
